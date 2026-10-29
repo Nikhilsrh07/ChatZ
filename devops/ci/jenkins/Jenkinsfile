@@ -1,0 +1,12 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Validate Helm chart') {
+            steps {
+                sh 'helm lint devops/helm/chatz'
+                sh 'helm template chatz devops/helm/chatz --namespace chatz'
+            }
+        }
+    }
+}

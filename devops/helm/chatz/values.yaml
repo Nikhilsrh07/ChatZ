@@ -1,0 +1,31 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/example/chatz-backend
+  pullPolicy: IfNotPresent
+  tag: "replace-me"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+containerPort: 8080
+health:
+  path: /healthz
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

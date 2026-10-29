@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chatz
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE_WITH_OWNER/ChatZ.git
+    targetRevision: main
+    path: devops/helm/chatz
+    helm:
+      releaseName: chatz
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chatz
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

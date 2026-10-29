@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+      - name: Validate Helm chart
+        run: |
+          helm lint devops/helm/chatz
+          helm template chatz devops/helm/chatz --namespace chatz

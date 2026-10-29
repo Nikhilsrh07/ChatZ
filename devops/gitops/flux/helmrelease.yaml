@@ -1,0 +1,30 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: chatz
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/REPLACE_WITH_OWNER/ChatZ.git
+  ref:
+    branch: main
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: chatz
+  namespace: chatz
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: ./devops/helm/chatz
+      sourceRef:
+        kind: GitRepository
+        name: chatz
+        namespace: flux-system
+      interval: 1m
+  install:
+    createNamespace: true
+  values:
+    replicaCount: 2

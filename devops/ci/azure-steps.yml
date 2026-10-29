@@ -1,0 +1,8 @@
+steps:
+  - task: HelmInstaller@1
+    inputs:
+      helmVersionToInstall: 3.15.4
+  - script: |
+      helm lint devops/helm/chatz
+      helm template chatz devops/helm/chatz --namespace chatz
+    displayName: Validate Helm chart
