@@ -34,7 +34,7 @@ The backend must listen on the configured container port and implement the confi
 
 ## GitOps setup
 
-Update the example repository URL in the Argo CD or Flux manifest before applying it. Configure cluster access and image-pull credentials through your platform's secret manager; never commit credentials to this repository.
+The Argo CD and Flux examples point to the public ChatZ repository. Change the repository URL if you fork it. Configure cluster access and image-pull credentials through your platform's secret manager; never commit credentials to this repository.
 
 ## Publish to GitHub
 
@@ -44,7 +44,7 @@ After installing Git and the GitHub CLI and authenticating with `gh auth login`,
 gh repo create ChatZ --public --source . --remote origin --push
 ```
 
-Replace `REPLACE_WITH_OWNER` in the GitOps examples with the GitHub account or organization that owns the repository before enabling reconciliation.
+The GitOps examples are configured for this repository. Update their repository URL if you publish under a different owner or fork.
 
 ## CI
 

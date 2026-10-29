@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/REPLACE_WITH_OWNER/ChatZ.git
+    repoURL: https://github.com/Nikhilsrh07/ChatZ.git
     targetRevision: main
     path: devops/helm/chatz
     helm:

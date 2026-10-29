@@ -5,7 +5,7 @@ metadata:
   namespace: flux-system
 spec:
   interval: 1m
-  url: https://github.com/REPLACE_WITH_OWNER/ChatZ.git
+  url: https://github.com/Nikhilsrh07/ChatZ.git
   ref:
     branch: main
 ---
