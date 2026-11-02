@@ -1,60 +1,115 @@
 # ChatZ
 
-ChatZ is a starter repository for a local-network chat client. It contains an Android Kotlin engine, a Swift Network-framework counterpart, and a Helm/GitOps example for a future backend.
+ChatZ is an Android local-network chat app with on-device SQLite history and an optional authenticated MongoDB sync service. The Android app supports TCP chat over Wi-Fi or an IP network shared through Bluetooth tethering, plus direct Bluetooth Classic chat between paired Android devices.
 
-> The supplied source was only `LocalChatEngine.kt`. No existing Swift files or backend service were available, so `ios/LocalChatEngine.swift` is a new counterpart, not a change to an existing iOS app. The mobile peer-to-peer client is not itself a Kubernetes workload. The deployment chart is an example for a separately built ChatZ backend and will not work until its image and health endpoint exist.
+The iOS directory currently contains a Network-framework engine only; there is no iOS app project yet. Direct Bluetooth Classic is Android-only. A later iOS app will need a separate cross-platform Bluetooth protocol.
 
-## Repository layout
+## Features
 
-- `android/` — improved Android local-chat engine.
-- `ios/` — Swift counterpart using Bonjour and Apple's Network framework.
-- `devops/helm/chatz/` — configurable backend Helm chart.
-- `devops/kubernetes/` — namespace and deployment notes.
-- `devops/gitops/` — Argo CD and Flux examples.
-- `devops/ci/` — Jenkins, Azure Pipelines, and GitLab CI chart validation.
-- `.github/workflows/ci.yml` — GitHub Actions chart validation.
+- **Wi-Fi:** discover peers with Android Network Service Discovery (Bonjour/mDNS) and connect over TCP.
+- **Bluetooth tethering:** use the tethered IP network. If service discovery is unavailable, enter the other device's IP address and connect to TCP port `45454`.
+- **Direct Bluetooth:** use Bluetooth Classic RFCOMM between paired Android devices.
+- **Local persistence:** every sent and received message is saved in the Android app's SQLite database.
+- **NoSQL sync:** optionally upload pending messages to MongoDB and download remote messages. Local chat/history continue to work if the backend is not configured or is unreachable.
+- Messages are single-line UTF-8 text with a maximum size of 64 KiB.
 
-## Local-network behavior
+## Run the Android app
 
-The engines exchange UTF-8 text messages delimited by newlines and advertise/discover `_localchat._tcp`. Keep messages to one line and at most 64 KiB. Network callbacks run on background queues; dispatch to the UI thread before updating UI.
+1. Install Android Studio, JDK 17, Gradle 8.9, and Android SDK Platform 35.
+2. Open the `android/` directory in Android Studio and configure it to use the installed Gradle distribution, or build from PowerShell:
 
-On Android, request the platform's local-network permissions appropriate to the target SDK and declare the service in the app manifest. On iOS, add `NSLocalNetworkUsageDescription` and the `_localchat._tcp` entry to `NSBonjourServices` in the app's `Info.plist`. Verify permission prompts and discovery on physical devices.
+   ```powershell
+   gradle -p .\android :app:assembleDebug
+   gradle -p .\android :app:installDebug
+   ```
 
-## Helm quick start
+3. Connect an Android 8.0+ device (API 26 or newer) or start an emulator. For actual Bluetooth and local-network testing, use two physical devices; emulators do not reliably reproduce these network paths.
 
-The chart uses a deliberately non-existent example image by default. Replace it with a real, versioned backend image before installing:
+### Wi-Fi and Bluetooth tethering
+
+On both devices, tap **Start Wi-Fi / tethered network chat**. Wi-Fi peers should be found automatically when the LAN allows multicast and device-to-device traffic. If discovery is blocked—including on some tethering implementations—start the listener on both devices, find the listening device's IP address in Android network settings, enter it on the other device, and tap **Connect by IP on port 45454**. Then send a message over the network.
+
+Bluetooth tethering is controlled by Android system settings; ChatZ does not enable or configure tethering. Some devices block peer-to-peer traffic over tethered networks. Both devices must be able to reach each other's IP address and TCP port `45454`.
+
+### Direct Bluetooth
+
+Pair the two Android devices in system Bluetooth settings. On both devices, tap **Start Bluetooth server**. On the initiating device, tap **Load paired Bluetooth devices** or **Discover Bluetooth devices**, choose the peer, then tap **Connect Bluetooth**. Grant the requested Bluetooth permissions. Direct Bluetooth uses RFCOMM and does not require Wi-Fi or Internet.
+
+## Run MongoDB sync locally
+
+Docker Desktop with Docker Compose is required.
+
+1. In PowerShell, from the `backend/` directory, copy `.env.example` to `.env`:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+2. Replace both sample passwords/tokens with long random URL-safe values (for example, generate each with `python -c "import secrets; print(secrets.token_urlsafe(32))"`). Do not commit `.env`.
+3. Start MongoDB and the API:
+
+   ```powershell
+   docker compose up --build -d
+   Invoke-RestMethod http://localhost:8000/healthz
+   ```
+
+4. Find the development computer's LAN IP address. In `android/local.properties`, preserve any existing `sdk.dir` entry and add:
+
+   ```properties
+   chatz.syncUrl=http://YOUR_COMPUTER_LAN_IP:8000
+   chatz.syncToken=THE_CHATZ_SYNC_TOKEN_FROM_backend/.env
+   ```
+
+5. Re-sync and run the Android app in a **debug** build. ChatZ uploads locally stored unsynced messages, marks them synced only after API confirmation, then imports recent messages from MongoDB into local SQLite.
+
+`backend/.env.example` contains placeholders only. MongoDB data is stored in the Compose `mongo-data` volume. Use `docker compose down` to stop the services; do not use `down -v` unless you intend to delete that database volume.
+
+### API
+
+- `GET /healthz` — readiness check; verifies MongoDB connectivity.
+- `POST /api/messages` — authenticated, idempotent message upsert.
+- `GET /api/messages?limit=50` — authenticated message retrieval (limit 1–100).
+
+The API requires `MONGODB_URI` and a `CHATZ_SYNC_TOKEN` with at least 32 characters. The Android debug build uses the configured bearer token. This shared-token setup is for private development/testing only: the token is embedded in the APK and HTTP is enabled only in the Android debug manifest. A production deployment must use HTTPS and user/device-scoped authentication instead of shipping a shared secret.
+
+## Security notes
+
+- The Wi-Fi/tethered TCP chat protocol is plaintext and intended for trusted local networks. Do not expose TCP port `45454` to the public Internet.
+- Direct Bluetooth chat uses paired-device RFCOMM.
+- The development MongoDB API token is shared across configured devices and the API returns messages for that token. Use private networking during development; production needs TLS, per-user/device authorization, and a managed secrets solution.
+- Android message history is local to the app and Android backups are disabled.
+
+## Backend tests
+
+From the repository root in PowerShell:
+
+```powershell
+python -m venv backend\.venv
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+Push-Location backend
+.venv\Scripts\python.exe -m unittest -v
+Pop-Location
+```
+
+## Deploy the sync API with Helm
+
+Build and publish the image from the `backend/` directory, then create a Kubernetes Secret named `chatz-backend-secrets` (or configure another name in `devops/helm/chatz/values.yaml`) with keys `MONGODB_URI` and `CHATZ_SYNC_TOKEN`. Supply the MongoDB URI and token through a managed secret store; never put their values in Helm files or CI logs.
+
+```powershell
+docker build -t YOUR_REGISTRY/chatz-backend:YOUR_TAG .\backend
+docker push YOUR_REGISTRY/chatz-backend:YOUR_TAG
+```
+
+The chart deploys the stateless API on port `8080` by default, with health checks at `/healthz`. Set `image.repository` and `image.tag` to the published API image, and set `containerPort` and `service.port` to `8000` to match the supplied backend:
 
 ```powershell
 helm lint .\devops\helm\chatz
 helm template chatz .\devops\helm\chatz --namespace chatz
-helm upgrade --install chatz .\devops\helm\chatz --namespace chatz --create-namespace --set image.repository=YOUR_REGISTRY/chatz-backend --set image.tag=YOUR_TAG
+helm upgrade --install chatz .\devops\helm\chatz --namespace chatz --create-namespace --set image.repository=YOUR_REGISTRY/chatz-backend --set image.tag=YOUR_TAG --set containerPort=8000 --set service.port=8000
 ```
 
-The backend must listen on the configured container port and implement the configured HTTP health endpoint. Do not expose a peer-to-peer mobile client as a Kubernetes service.
-
-## GitOps setup
-
-The Argo CD and Flux examples point to the public ChatZ repository. Change the repository URL if you fork it. Configure cluster access and image-pull credentials through your platform's secret manager; never commit credentials to this repository.
-
-## Publish to GitHub
-
-After installing Git and the GitHub CLI and authenticating with `gh auth login`, create the public repository from this directory:
-
-```powershell
-gh repo create ChatZ --public --source . --remote origin --push
-```
-
-The GitOps examples are configured for this repository. Update their repository URL if you publish under a different owner or fork.
+The chart does not provision MongoDB. Configure `MONGODB_URI` to point to a managed MongoDB-compatible service or an independently operated MongoDB deployment.
 
 ## CI
 
-The pipeline examples validate the Helm chart. Azure Pipelines, GitLab CI, and GitHub Actions have repository-root entry points; configure Jenkins to use `devops/ci/jenkins/Jenkinsfile`. These pipelines do not build mobile apps because the supplied code has no Gradle project, Xcode project, or Swift package. Add platform build/test jobs after integrating the code into those app projects.
-
-CI checks the chart; Argo CD or Flux performs the continuous delivery reconciliation. No cluster credentials are placed in the CI configuration.
-
-## Security notes
-
-- Use private registries and immutable image tags for releases.
-- Set resource requests/limits and run the backend as a non-root user.
-- Keep secrets out of values files and source control.
-- The example chart enables a restrictive pod security context; adapt it only when the backend requires it.
+GitHub Actions runs the MongoDB API unit tests, builds the Android debug APK, and validates the Helm chart. The GitLab CI, Azure Pipelines, and Jenkins examples currently validate the Helm chart. iOS build/test automation requires macOS and an Xcode project.

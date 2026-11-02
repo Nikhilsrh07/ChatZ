@@ -33,6 +33,17 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
+          env:
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backendSecrets.name | quote }}
+                  key: {{ .Values.backendSecrets.mongoUriKey | quote }}
+            - name: CHATZ_SYNC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backendSecrets.name | quote }}
+                  key: {{ .Values.backendSecrets.syncTokenKey | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

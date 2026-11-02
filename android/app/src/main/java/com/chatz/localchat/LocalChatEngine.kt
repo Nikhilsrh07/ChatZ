@@ -12,6 +12,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -21,7 +22,7 @@ class LocalChatEngine(
     private val onError: (String, Throwable?) -> Unit = { _, _ -> },
 ) : AutoCloseable {
     private val serviceType = "_localchat._tcp."
-    private val serviceName = "ChatZ"
+    private val serviceName = "ChatZ-${UUID.randomUUID().toString().take(8)}"
     private val nsdManager = context.applicationContext
         .getSystemService(Context.NSD_SERVICE) as NsdManager
     private val lock = Any()
@@ -30,6 +31,7 @@ class LocalChatEngine(
     @Volatile
     private var closed = false
     private var serverSocket: ServerSocket? = null
+    private var serverStarting = false
     private var activeSocket: Socket? = null
     private var writer: BufferedWriter? = null
     private var registrationRequested = false
@@ -38,27 +40,31 @@ class LocalChatEngine(
     fun startServerAndRegister() {
         synchronized(lock) {
             check(!closed) { "LocalChatEngine is closed" }
-            if (serverSocket != null) return
+            if (serverSocket != null || serverStarting) return
+            serverStarting = true
         }
 
         io.execute {
+            var server: ServerSocket? = null
             try {
-                val server = ServerSocket().apply {
+                val createdServer = ServerSocket().apply {
                     reuseAddress = true
-                    bind(InetSocketAddress(0))
+                    bind(InetSocketAddress(SERVER_PORT))
                 }
+                server = createdServer
                 synchronized(lock) {
+                    serverStarting = false
                     if (closed) {
-                        server.close()
+                        createdServer.close()
                         return@execute
                     }
-                    serverSocket = server
+                    serverSocket = createdServer
                 }
 
                 val serviceInfo = NsdServiceInfo().apply {
                     serviceName = this@LocalChatEngine.serviceName
                     serviceType = this@LocalChatEngine.serviceType
-                    port = server.localPort
+                    port = createdServer.localPort
                 }
                 synchronized(lock) { registrationRequested = true }
                 nsdManager.registerService(
@@ -68,13 +74,35 @@ class LocalChatEngine(
                 )
 
                 while (!closed) {
-                    val socket = server.accept()
+                    val socket = createdServer.accept()
                     attachPeer(socket)
                 }
             } catch (error: IOException) {
+                synchronized(lock) {
+                    serverStarting = false
+                    if (serverSocket === server) serverSocket = null
+                }
                 if (!closed) report("Local chat server stopped unexpectedly", error)
             } catch (error: RuntimeException) {
+                synchronized(lock) {
+                    serverStarting = false
+                    if (serverSocket === server) serverSocket = null
+                }
                 if (!closed) report("Unable to start or register the local chat server", error)
+            } finally {
+                val shouldUnregister = synchronized(lock) {
+                    if (serverSocket === server) serverSocket = null
+                    serverStarting = false
+                    registrationRequested.also { registrationRequested = false }
+                }
+                closeQuietly(server)
+                if (shouldUnregister) {
+                    try {
+                        nsdManager.unregisterService(registrationListener)
+                    } catch (error: IllegalArgumentException) {
+                        if (!closed) report("Unable to unregister the stopped local chat service", error)
+                    }
+                }
             }
         }
     }
@@ -94,6 +122,23 @@ class LocalChatEngine(
         } catch (error: RuntimeException) {
             synchronized(lock) { discoveryStarted = false }
             report("Unable to start local service discovery", error)
+        }
+    }
+
+    fun connectToPeer(address: String) {
+        check(!closed) { "LocalChatEngine is closed" }
+        val host = address.trim()
+        require(host.isNotEmpty()) { "Enter the peer's IP address" }
+        io.execute {
+            val socket = Socket()
+            try {
+                val remoteAddress = java.net.InetAddress.getByName(host)
+                socket.connect(InetSocketAddress(remoteAddress, SERVER_PORT), CONNECT_TIMEOUT_MS)
+                attachPeer(socket)
+            } catch (error: IOException) {
+                closeQuietly(socket)
+                if (!closed) report("Unable to connect to network peer at $host", error)
+            }
         }
     }
 
@@ -128,6 +173,7 @@ class LocalChatEngine(
         synchronized(lock) {
             if (closed) return
             closed = true
+            serverStarting = false
             socketToClose = activeSocket
             activeSocket = null
             writer = null
@@ -159,6 +205,15 @@ class LocalChatEngine(
     }
 
     private fun attachPeer(socket: Socket) {
+        val nextWriter = try {
+            BufferedWriter(
+                OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8),
+            )
+        } catch (error: IOException) {
+            closeQuietly(socket)
+            if (!closed) report("Unable to open the peer connection", error)
+            return
+        }
         synchronized(lock) {
             if (closed) {
                 closeQuietly(socket)
@@ -166,9 +221,7 @@ class LocalChatEngine(
             }
             closeQuietly(activeSocket)
             activeSocket = socket
-            writer = BufferedWriter(
-                OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8),
-            )
+            writer = nextWriter
         }
 
         io.execute {
@@ -303,8 +356,9 @@ class LocalChatEngine(
         override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
     }
 
-    private companion object {
-        const val CONNECT_TIMEOUT_MS = 5_000
-        const val MAX_MESSAGE_BYTES = 64 * 1024
+    companion object {
+        private const val CONNECT_TIMEOUT_MS = 5_000
+        private const val MAX_MESSAGE_BYTES = 64 * 1024
+        const val SERVER_PORT = 45_454
     }
 }

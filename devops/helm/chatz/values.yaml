@@ -17,6 +17,11 @@ containerPort: 8080
 health:
   path: /healthz
 
+backendSecrets:
+  name: chatz-backend-secrets
+  mongoUriKey: MONGODB_URI
+  syncTokenKey: CHATZ_SYNC_TOKEN
+
 resources:
   requests:
     cpu: 100m
