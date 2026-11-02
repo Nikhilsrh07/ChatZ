@@ -12,6 +12,7 @@ DerivedData/
 .gradle/
 build/
 local.properties
+ios/ChatZ/Local.xcconfig
 *.iml
 .idea/
 coverage/

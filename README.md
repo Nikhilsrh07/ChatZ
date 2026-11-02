@@ -1,15 +1,24 @@
 # ChatZ
 
-ChatZ is an Android local-network chat app with on-device SQLite history and an optional authenticated MongoDB sync service. The Android app supports TCP chat over Wi-Fi or an IP network shared through Bluetooth tethering, plus direct Bluetooth Classic chat between paired Android devices.
+ChatZ is a local-network chat app with native Android and iOS clients, on-device SQLite history, and an optional authenticated MongoDB sync service. Both clients support TCP chat over Wi-Fi or an IP network shared through Bluetooth tethering. Android also supports direct Bluetooth Classic chat between paired Android devices.
 
-The iOS directory currently contains a Network-framework engine only; there is no iOS app project yet. Direct Bluetooth Classic is Android-only. A later iOS app will need a separate cross-platform Bluetooth protocol.
+## iOS app
+
+The native SwiftUI iOS app is in `ios/ChatZ.xcodeproj`. It includes SQLite message history, Bonjour peer discovery, manual IP connections for tethered networks, and optional MongoDB API sync. iOS does not support Android's Bluetooth Classic RFCOMM chat; use Wi-Fi or Bluetooth tethering and connect by IP instead.
+
+1. On a Mac with Xcode 15 or newer, open `ios/ChatZ.xcodeproj`.
+2. Select the ChatZ scheme and an iOS 16+ simulator or connected iPhone, then Run. The first local-network action prompts for network permission.
+3. For MongoDB sync, copy `ios/ChatZ/Local.xcconfig.example` to `ios/ChatZ/Local.xcconfig`, then set the development API URL and bearer token. This local file is git-ignored; do not use a shared development token in a production build.
+4. On both devices, tap **Start Wi-Fi chat**. For Bluetooth tethering or when Bonjour discovery is blocked, start the listener on both devices, enter the peer's IP address on one, and tap **Connect**. TCP port `45454` is shared with Android.
+
+GitHub Actions is configured to build the iOS simulator app on macOS. A Windows machine cannot run Xcode or install the iOS app; use Xcode on a Mac for simulator/device execution.
 
 ## Features
 
-- **Wi-Fi:** discover peers with Android Network Service Discovery (Bonjour/mDNS) and connect over TCP.
+- **Wi-Fi:** discover peers with Android Network Service Discovery or iOS Bonjour (mDNS) and connect over TCP.
 - **Bluetooth tethering:** use the tethered IP network. If service discovery is unavailable, enter the other device's IP address and connect to TCP port `45454`.
 - **Direct Bluetooth:** use Bluetooth Classic RFCOMM between paired Android devices.
-- **Local persistence:** every sent and received message is saved in the Android app's SQLite database.
+- **Local persistence:** every sent and received message is saved in each app's on-device SQLite database.
 - **NoSQL sync:** optionally upload pending messages to MongoDB and download remote messages. Local chat/history continue to work if the backend is not configured or is unreachable.
 - Messages are single-line UTF-8 text with a maximum size of 64 KiB.
 
@@ -60,7 +69,8 @@ Docker Desktop with Docker Compose is required.
    chatz.syncToken=THE_CHATZ_SYNC_TOKEN_FROM_backend/.env
    ```
 
-5. Re-sync and run the Android app in a **debug** build. ChatZ uploads locally stored unsynced messages, marks them synced only after API confirmation, then imports recent messages from MongoDB into local SQLite.
+5. In iOS, optionally configure the same URL and token in `ios/ChatZ/Local.xcconfig`.
+6. Tap **Sync** in either app. ChatZ uploads locally stored unsynced messages, marks them synced only after API confirmation, then imports recent messages from MongoDB into local SQLite.
 
 `backend/.env.example` contains placeholders only. MongoDB data is stored in the Compose `mongo-data` volume. Use `docker compose down` to stop the services; do not use `down -v` unless you intend to delete that database volume.
 

@@ -1,0 +1,3 @@
+CHATZ_SYNC_API_BASE_URL =
+CHATZ_SYNC_API_TOKEN =
+#include? "Local.xcconfig"

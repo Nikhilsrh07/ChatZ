@@ -43,6 +43,13 @@ jobs:
       - name: Build debug APK
         run: gradle -p android :app:assembleDebug
 
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build iOS simulator app
+        run: xcodebuild -project ios/ChatZ.xcodeproj -scheme ChatZ -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+
   helm:
     runs-on: ubuntu-latest
     steps:

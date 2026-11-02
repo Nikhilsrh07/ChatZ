@@ -7,7 +7,7 @@ public final class LocalChatEngine {
 
     private let queue = DispatchQueue(label: "com.chatz.local-chat")
     private let serviceType = "_localchat._tcp"
-    private let serviceName = "ChatZ"
+    private let serviceName = "ChatZ iOS"
     private let maximumMessageBytes = 64 * 1024
     private var listener: NWListener?
     private var browser: NWBrowser?
@@ -19,9 +19,15 @@ public final class LocalChatEngine {
 
     public func startServerAndRegister() {
         queue.async { [weak self] in
-            guard let self, !self.stopped, self.listener == nil else { return }
+            guard let self else { return }
+            self.stopped = false
+            guard self.listener == nil else { return }
             do {
-                let listener = try NWListener(using: .tcp)
+                guard let port = NWEndpoint.Port(rawValue: Self.serverPort) else {
+                    self.report(LocalChatError.invalidPort)
+                    return
+                }
+                let listener = try NWListener(using: .tcp, on: port)
                 listener.service = NWListener.Service(name: self.serviceName, type: self.serviceType)
                 listener.newConnectionHandler = { [weak self] connection in
                     self?.accept(connection)
@@ -66,10 +72,22 @@ public final class LocalChatEngine {
         }
     }
 
+    public func connectToPeer(_ host: String) {
+        let address = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        queue.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            guard !address.isEmpty, let port = NWEndpoint.Port(rawValue: Self.serverPort) else {
+                self.report(LocalChatError.invalidAddress)
+                return
+            }
+            self.connect(to: .hostPort(host: NWEndpoint.Host(address), port: port))
+        }
+    }
+
     public func sendMessage(_ message: String) {
         queue.async { [weak self] in
             guard let self else { return }
-            guard !message.contains("\n"), !message.contains("\r") else {
+            guard !message.isEmpty, !message.contains("\n"), !message.contains("\r") else {
                 self.report(LocalChatError.invalidMessage)
                 return
             }
@@ -154,6 +172,9 @@ public final class LocalChatEngine {
                 self.consumeCompleteMessages()
             }
             if isComplete {
+                if !self.receiveBuffer.isEmpty {
+                    self.report(LocalChatError.invalidMessage)
+                }
                 self.clear(connection)
             } else {
                 self.receive(from: connection)
@@ -165,7 +186,8 @@ public final class LocalChatEngine {
         while let delimiter = receiveBuffer.firstIndex(of: 0x0A) {
             let messageData = receiveBuffer[..<delimiter]
             receiveBuffer.removeSubrange(...delimiter)
-            guard messageData.count <= maximumMessageBytes,
+            guard !messageData.isEmpty,
+                  messageData.count <= maximumMessageBytes,
                   let message = String(data: messageData, encoding: .utf8) else {
                 report(LocalChatError.invalidMessage)
                 continue
@@ -179,8 +201,8 @@ public final class LocalChatEngine {
         }
     }
 
-    private func clear(_ connection: NWConnection) {
-        guard activeConnection === connection else { return }
+    private func clear(_ connection: NWConnection?) {
+        guard let connection, activeConnection === connection else { return }
         activeConnection = nil
         receiveBuffer.removeAll()
     }
@@ -188,17 +210,25 @@ public final class LocalChatEngine {
     private func report(_ error: Error) {
         onError?(error)
     }
+
+    public static let serverPort: UInt16 = 45_454
 }
 
 private enum LocalChatError: LocalizedError {
+    case invalidAddress
     case invalidMessage
+    case invalidPort
     case messageTooLarge
     case noPeerConnected
 
     var errorDescription: String? {
         switch self {
+        case .invalidAddress:
+            return "Enter the peer's IP address."
         case .invalidMessage:
-            return "Messages must be valid UTF-8, single-line text."
+            return "Messages must be non-empty, single-line text."
+        case .invalidPort:
+            return "The chat TCP port is invalid."
         case .messageTooLarge:
             return "Message exceeds the 64 KiB limit."
         case .noPeerConnected:
