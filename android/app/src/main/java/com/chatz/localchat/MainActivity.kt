@@ -113,7 +113,7 @@ class MainActivity : Activity() {
         })
         networkAddressInput = EditText(this).apply {
             hint = "Peer IP address (for Bluetooth tethering)"
-            singleLine = true
+            setSingleLine(true)
         }
         content.addView(networkAddressInput, matchWidth())
         content.addView(button("Connect by IP on port 45454") {
@@ -168,7 +168,7 @@ class MainActivity : Activity() {
         content.addView(bluetoothPeerSpinner, matchWidth())
         bluetoothAddressInput = EditText(this).apply {
             hint = "Bluetooth address (filled after discovery)"
-            singleLine = true
+            setSingleLine(true)
         }
         content.addView(bluetoothAddressInput, matchWidth())
         bluetoothPeerSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -201,7 +201,7 @@ class MainActivity : Activity() {
         })
         messageInput = EditText(this).apply {
             hint = "Type a single-line message"
-            singleLine = true
+            setSingleLine(true)
         }
         content.addView(messageInput, matchWidth())
         content.addView(button("Send over Wi-Fi / tethered network") {
