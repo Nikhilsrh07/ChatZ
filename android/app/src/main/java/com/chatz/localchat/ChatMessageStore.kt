@@ -349,7 +349,6 @@ class ChatMessageStore(context: Context) :
             null,
             "1",
         ).use { it.moveToFirst() }
-    }
 
     private fun requireConversation(conversation: ChatConversation, allowDirect: Boolean) {
         require(conversation.id.isNotBlank() && conversation.id.length <= MAX_CONVERSATION_ID_LENGTH) {

@@ -120,7 +120,7 @@ public final class LocalChatEngine {
         }
     }
 
-    public func announceConversation(_ conversation: ChatConversation) {
+    func announceConversation(_ conversation: ChatConversation) {
         guard conversation.type != "direct" else { return }
         queue.async { [weak self] in
             guard let self else { return }
@@ -135,7 +135,7 @@ public final class LocalChatEngine {
         }
     }
 
-    public func sendRoomMessage(_ message: ChatMessage) {
+    func sendRoomMessage(_ message: ChatMessage) {
         queue.async { [weak self] in
             guard let self else { return }
             _ = self.remember(message.id, in: &self.seenMessageIds)
