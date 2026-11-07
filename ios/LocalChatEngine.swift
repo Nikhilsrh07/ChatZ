@@ -131,7 +131,7 @@ public final class LocalChatEngine {
                 "type": conversation.type
             ]
             _ = self.remember(conversation.id, in: &self.seenConversationIds)
-            self.broadcast(packet: packet)
+            self.broadcast(packet)
         }
     }
 
@@ -147,7 +147,7 @@ public final class LocalChatEngine {
                 "conversation_type": message.conversationType,
                 "body": message.body
             ]
-            self.broadcast(packet: packet)
+            self.broadcast(packet)
         }
     }
 
@@ -289,7 +289,7 @@ public final class LocalChatEngine {
                 throw LocalChatError.invalidMessage
             }
             guard isNew else { return }
-            broadcast(packet: packet, excluding: connection)
+            broadcast(packet, excluding: connection)
             onMessageReceived?(event)
         } catch {
             report(error)
