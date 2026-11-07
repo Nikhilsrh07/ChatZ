@@ -86,6 +86,15 @@ class MongoSyncClient(
                         direction = ChatMessageStore.DIRECTION_INCOMING,
                         transport = message.getString("transport"),
                         synced = true,
+                        conversationId = message.optString(
+                            "conversation_id",
+                            ChatMessageStore.DIRECT_CONVERSATION_ID,
+                        ),
+                        conversationName = message.optString("conversation_name", "Direct"),
+                        conversationType = message.optString(
+                            "conversation_type",
+                            ChatMessageStore.TYPE_DIRECT,
+                        ),
                     ),
                 )
             }
@@ -109,6 +118,9 @@ class MongoSyncClient(
                 .put("created_at", message.createdAt)
                 .put("direction", message.direction)
                 .put("transport", message.transport)
+                .put("conversation_id", message.conversationId)
+                .put("conversation_name", message.conversationName)
+                .put("conversation_type", message.conversationType)
             connection.outputStream.use { output ->
                 output.write(payload.toString().toByteArray(Charsets.UTF_8))
             }

@@ -3,6 +3,7 @@ package com.chatz.localchat
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.IOException
@@ -12,14 +13,16 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.LinkedHashSet
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class LocalChatEngine(
     context: Context,
-    private val onMessageReceived: (String) -> Unit,
+    private val onMessageReceived: (LocalChatEvent) -> Unit,
     private val onError: (String, Throwable?) -> Unit = { _, _ -> },
+    private val onPeerConnected: () -> Unit = {},
 ) : AutoCloseable {
     private val serviceType = "_localchat._tcp."
     private val serviceName = "ChatZ-${UUID.randomUUID().toString().take(8)}"
@@ -33,7 +36,9 @@ class LocalChatEngine(
     private var serverSocket: ServerSocket? = null
     private var serverStarting = false
     private var activeSocket: Socket? = null
-    private var writer: BufferedWriter? = null
+    private val peerWriters = linkedMapOf<Socket, BufferedWriter>()
+    private val seenMessageIds = LinkedHashSet<String>()
+    private val seenConversationIds = LinkedHashSet<String>()
     private var registrationRequested = false
     private var discoveryStarted = false
 
@@ -154,10 +159,13 @@ class LocalChatEngine(
         io.execute {
             try {
                 synchronized(lock) {
-                    val target = writer ?: throw IOException("No peer is connected")
-                    target.write(message)
-                    target.newLine()
-                    target.flush()
+                    val target = activeSocket?.let(peerWriters::get)
+                        ?: throw IOException("No peer is connected")
+                    synchronized(target) {
+                        target.write(message)
+                        target.newLine()
+                        target.flush()
+                    }
                 }
             } catch (error: IOException) {
                 report("Unable to send message", error)
@@ -165,8 +173,31 @@ class LocalChatEngine(
         }
     }
 
+    fun announceConversation(conversation: ChatConversation) {
+        if (conversation.type == ChatMessageStore.TYPE_DIRECT) return
+        synchronized(lock) { remember(seenConversationIds, conversation.id) }
+        val packet = JSONObject()
+            .put("kind", "conversation")
+            .put("id", conversation.id)
+            .put("name", conversation.name)
+            .put("type", conversation.type)
+        broadcast(encodePacket(packet))
+    }
+
+    fun sendRoomMessage(message: ChatMessage) {
+        val packet = JSONObject()
+            .put("kind", "message")
+            .put("id", message.id)
+            .put("conversation_id", message.conversationId)
+            .put("conversation_name", message.conversationName)
+            .put("conversation_type", message.conversationType)
+            .put("body", message.body)
+        synchronized(lock) { remember(seenMessageIds, message.id) }
+        broadcast(encodePacket(packet))
+    }
+
     override fun close() {
-        val socketToClose: Socket?
+        val socketsToClose: List<Socket>
         val serverToClose: ServerSocket?
         val shouldUnregister: Boolean
         val shouldStopDiscovery: Boolean
@@ -174,9 +205,9 @@ class LocalChatEngine(
             if (closed) return
             closed = true
             serverStarting = false
-            socketToClose = activeSocket
+            socketsToClose = peerWriters.keys.toList()
+            peerWriters.clear()
             activeSocket = null
-            writer = null
             serverToClose = serverSocket
             serverSocket = null
             shouldUnregister = registrationRequested
@@ -185,7 +216,7 @@ class LocalChatEngine(
             discoveryStarted = false
         }
 
-        closeQuietly(socketToClose)
+        socketsToClose.forEach(::closeQuietly)
         closeQuietly(serverToClose)
         if (shouldUnregister) {
             try {
@@ -219,10 +250,10 @@ class LocalChatEngine(
                 closeQuietly(socket)
                 return
             }
-            closeQuietly(activeSocket)
             activeSocket = socket
-            writer = nextWriter
+            peerWriters[socket] = nextWriter
         }
+        onPeerConnected()
 
         io.execute {
             try {
@@ -231,19 +262,19 @@ class LocalChatEngine(
                 ).use { reader ->
                     while (!closed) {
                         val line = readBoundedLine(reader) ?: break
-                        if (line.toByteArray(StandardCharsets.UTF_8).size > MAX_MESSAGE_BYTES) {
-                            throw IOException("Received message exceeds the 64 KiB limit")
+                        if (line.toByteArray(StandardCharsets.UTF_8).size > MAX_FRAME_BYTES) {
+                            throw IOException("Received chat frame exceeds the size limit")
                         }
-                        onMessageReceived(line)
+                        receiveLine(line, socket)
                     }
                 }
             } catch (error: IOException) {
                 if (!closed) report("Peer connection ended with an error", error)
             } finally {
                 synchronized(lock) {
+                    peerWriters.remove(socket)
                     if (activeSocket === socket) {
-                        activeSocket = null
-                        writer = null
+                        activeSocket = peerWriters.keys.lastOrNull()
                     }
                 }
                 closeQuietly(socket)
@@ -264,11 +295,91 @@ class LocalChatEngine(
                 if (reader.read() != '\n'.code) reader.reset()
                 return line.toString()
             }
-            if (line.length >= MAX_MESSAGE_BYTES) {
-                throw IOException("Received message exceeds the 64 KiB limit")
+            if (line.length >= MAX_FRAME_BYTES) {
+                throw IOException("Received chat frame exceeds the size limit")
             }
             line.append(value.toChar())
         }
+    }
+
+    private fun receiveLine(line: String, source: Socket) {
+        if (!line.startsWith(PACKET_PREFIX)) {
+            onMessageReceived(
+                LocalChatEvent(
+                    kind = "message",
+                    id = UUID.randomUUID().toString(),
+                    conversationId = ChatMessageStore.DIRECT_CONVERSATION_ID,
+                    conversationName = "Direct",
+                    conversationType = ChatMessageStore.TYPE_DIRECT,
+                    body = line,
+                ),
+            )
+            return
+        }
+
+        try {
+            val packet = JSONObject(line.removePrefix(PACKET_PREFIX))
+            val kind = packet.getString("kind")
+            val event = LocalChatEvent(
+                kind = kind,
+                id = packet.getString("id"),
+                conversationId = if (kind == "conversation") {
+                    packet.getString("id")
+                } else {
+                    packet.getString("conversation_id")
+                },
+                conversationName = if (kind == "conversation") {
+                    packet.getString("name")
+                } else {
+                    packet.getString("conversation_name")
+                },
+                conversationType = if (kind == "conversation") {
+                    packet.getString("type")
+                } else {
+                    packet.getString("conversation_type")
+                },
+                body = packet.optString("body"),
+            )
+            val isNew = synchronized(lock) {
+                when (kind) {
+                    "conversation" -> remember(seenConversationIds, event.conversationId)
+                    "message" -> remember(seenMessageIds, event.id)
+                    else -> throw IllegalArgumentException("Unknown chat frame kind")
+                }
+            }
+            if (!isNew) return
+            broadcast(encodePacket(packet), source)
+            onMessageReceived(event)
+        } catch (error: RuntimeException) {
+            report("Received an invalid ChatZ mesh message", error)
+        }
+    }
+
+    private fun broadcast(packet: String, excluded: Socket? = null) {
+        io.execute {
+            val writers = synchronized(lock) {
+                peerWriters.filterKeys { it !== excluded }.values.toList()
+            }
+            for (target in writers) {
+                try {
+                    synchronized(target) {
+                        target.write(packet)
+                        target.newLine()
+                        target.flush()
+                    }
+                } catch (error: IOException) {
+                    report("Unable to send a message to a mesh peer", error)
+                }
+            }
+        }
+    }
+
+    private fun encodePacket(packet: JSONObject): String = PACKET_PREFIX + packet.toString()
+
+    private fun remember(ids: LinkedHashSet<String>, id: String): Boolean {
+        if (!ids.add(id)) return false
+        if (ids.size > MAX_SEEN_IDS) ids.remove(ids.first())
+        return true
     }
 
     private fun connectToHost(host: java.net.InetAddress, port: Int) {
@@ -359,6 +470,18 @@ class LocalChatEngine(
     companion object {
         private const val CONNECT_TIMEOUT_MS = 5_000
         private const val MAX_MESSAGE_BYTES = 64 * 1024
+        private const val MAX_FRAME_BYTES = 256 * 1024
+        private const val MAX_SEEN_IDS = 5_000
+        private const val PACKET_PREFIX = "CHATZ1:"
         const val SERVER_PORT = 45_454
     }
 }
+
+data class LocalChatEvent(
+    val kind: String,
+    val id: String,
+    val conversationId: String,
+    val conversationName: String,
+    val conversationType: String,
+    val body: String,
+)

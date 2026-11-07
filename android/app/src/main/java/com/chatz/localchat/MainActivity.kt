@@ -2,6 +2,7 @@ package com.chatz.localchat
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteException
 import android.os.Build
@@ -29,6 +30,10 @@ class MainActivity : Activity() {
     private lateinit var bluetoothAddressInput: EditText
     private lateinit var bluetoothPeerSpinner: Spinner
     private lateinit var bluetoothPeerAdapter: ArrayAdapter<String>
+    private lateinit var conversationSpinner: Spinner
+    private lateinit var conversationAdapter: ArrayAdapter<String>
+    private var conversations = listOf<ChatConversation>()
+    private var selectedConversation = ChatMessageStore.directConversation()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,8 +47,24 @@ class MainActivity : Activity() {
         )
         networkEngine = LocalChatEngine(
             applicationContext,
-            onMessageReceived = { receiveMessage(it, "Wi-Fi / tethered network") },
+            onMessageReceived = ::receiveNetworkEvent,
             onError = ::showError,
+            onPeerConnected = {
+                runOnUiThread {
+                    try {
+                        store.conversations()
+                            .filter { it.type != ChatMessageStore.TYPE_DIRECT }
+                            .forEach { conversation ->
+                                networkEngine.announceConversation(conversation)
+                                store.recent(conversation.id).forEach(networkEngine::sendRoomMessage)
+                            }
+                    } catch (error: SQLiteException) {
+                        showError("Unable to read local room history for the mesh", error)
+                    } catch (error: RuntimeException) {
+                        showError("Unable to share local room history with the mesh", error)
+                    }
+                }
+            },
         )
         bluetoothEngine = BluetoothChatEngine(
             applicationContext,
@@ -54,6 +75,7 @@ class MainActivity : Activity() {
             onError = ::showError,
         )
         refreshHistory()
+        refreshConversations()
         syncClient.syncPending()
     }
 
@@ -82,6 +104,50 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun refreshConversations() {
+        val latest = store.conversations()
+        val selectedId = selectedConversation.id
+        conversations = latest
+        conversationAdapter.clear()
+        conversationAdapter.addAll(latest.map { conversation ->
+            val kind = when (conversation.type) {
+                ChatMessageStore.TYPE_GROUP -> "Group"
+                ChatMessageStore.TYPE_CHANNEL -> "Channel"
+                else -> "Direct"
+            }
+            "$kind · ${conversation.name}"
+        })
+        val selectedIndex = latest.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
+        selectedConversation = latest.getOrNull(selectedIndex) ?: ChatMessageStore.directConversation()
+        if (latest.isNotEmpty()) conversationSpinner.setSelection(selectedIndex, false)
+    }
+
+    private fun showCreateConversationDialog(type: String) {
+        val nameInput = EditText(this).apply {
+            hint = if (type == ChatMessageStore.TYPE_GROUP) "Group name" else "Channel name"
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (type == ChatMessageStore.TYPE_GROUP) "Create group chat" else "Create channel")
+            .setView(nameInput)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Create") { _, _ ->
+                try {
+                    val conversation = store.createConversation(nameInput.text.toString(), type)
+                    selectedConversation = conversation
+                    refreshConversations()
+                    refreshHistory()
+                    networkEngine.announceConversation(conversation)
+                    statusView.text = "${conversation.name} is visible to peers on the local network."
+                } catch (error: IllegalArgumentException) {
+                    statusView.text = error.message ?: "Unable to create conversation."
+                } catch (error: SQLiteException) {
+                    showError("Unable to create conversation", error)
+                }
+            }
+            .show()
+    }
+
     private fun buildInterface() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -100,6 +166,43 @@ class MainActivity : Activity() {
             textSize = 14f
         }
         content.addView(statusView, matchWidth())
+
+        content.addView(TextView(this).apply {
+            text = "Chats"
+            textSize = 18f
+        })
+        conversationAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            mutableListOf<String>(),
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        conversationSpinner = Spinner(this).apply {
+            adapter = conversationAdapter
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: android.widget.AdapterView<*>?,
+                    view: android.view.View?,
+                    position: Int,
+                    id: Long,
+                ) {
+                    conversations.getOrNull(position)?.let {
+                        selectedConversation = it
+                        refreshHistory()
+                    }
+                }
+
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
+        }
+        content.addView(conversationSpinner, matchWidth())
+        content.addView(button("Create local group chat") {
+            showCreateConversationDialog(ChatMessageStore.TYPE_GROUP)
+        })
+        content.addView(button("Create local channel") {
+            showCreateConversationDialog(ChatMessageStore.TYPE_CHANNEL)
+        })
 
         content.addView(button("Start Wi-Fi / tethered network chat") {
             try {
@@ -232,10 +335,27 @@ class MainActivity : Activity() {
             return
         }
         try {
-            store.insert(body, ChatMessageStore.DIRECTION_OUTGOING, transport)
+            if (transport == "Bluetooth" &&
+                selectedConversation.type != ChatMessageStore.TYPE_DIRECT
+            ) {
+                statusView.text = "Group chats and channels use Wi-Fi or Bluetooth tethering; direct Bluetooth remains one-to-one."
+                return
+            }
+            val savedMessage = store.insert(
+                body = body,
+                direction = ChatMessageStore.DIRECTION_OUTGOING,
+                transport = transport,
+                conversation = selectedConversation,
+            )
             refreshHistory()
             syncClient.syncPending()
-            send(body)
+            if (transport == "Wi-Fi / tethered network" &&
+                selectedConversation.type != ChatMessageStore.TYPE_DIRECT
+            ) {
+                networkEngine.sendRoomMessage(savedMessage)
+            } else {
+                send(body)
+            }
             messageInput.text.clear()
             statusView.text = "Message saved locally; attempting to send via $transport."
         } catch (error: IllegalArgumentException) {
@@ -249,7 +369,12 @@ class MainActivity : Activity() {
 
     private fun receiveMessage(body: String, transport: String) {
         try {
-            store.insert(body, ChatMessageStore.DIRECTION_INCOMING, transport)
+            store.insert(
+                body = body,
+                direction = ChatMessageStore.DIRECTION_INCOMING,
+                transport = transport,
+                conversation = ChatMessageStore.directConversation(),
+            )
             syncClient.syncPending()
             runOnUiThread {
                 refreshHistory()
@@ -264,8 +389,42 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun receiveNetworkEvent(event: LocalChatEvent) {
+        try {
+            if (event.kind == "conversation") {
+                store.saveConversation(
+                    ChatConversation(event.conversationId, event.conversationName, event.conversationType),
+                )
+                runOnUiThread { refreshConversations() }
+                return
+            }
+            val conversation = if (event.conversationType == ChatMessageStore.TYPE_DIRECT) {
+                ChatMessageStore.directConversation()
+            } else {
+                ChatConversation(event.conversationId, event.conversationName, event.conversationType)
+            }
+            store.insert(
+                body = event.body,
+                direction = ChatMessageStore.DIRECTION_INCOMING,
+                transport = "Wi-Fi / tethered network",
+                conversation = conversation,
+                id = event.id,
+            )
+            syncClient.syncPending()
+            runOnUiThread {
+                refreshConversations()
+                refreshHistory()
+                statusView.text = "Message received in ${conversation.name}."
+            }
+        } catch (error: IllegalArgumentException) {
+            showError("Received invalid network message", error)
+        } catch (error: SQLiteException) {
+            showError("Unable to save received network message", error)
+        }
+    }
+
     private fun refreshHistory() {
-        val messages = store.recent()
+        val messages = store.recent(selectedConversation.id)
         historyView.text = if (messages.isEmpty()) {
             "No messages yet."
         } else {

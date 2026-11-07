@@ -20,6 +20,9 @@ class MessagePayload(BaseModel):
     created_at: int = Field(gt=0)
     direction: Literal["outgoing", "incoming"]
     transport: Literal["Wi-Fi / tethered network", "Bluetooth"]
+    conversation_id: str = Field(default="direct", min_length=1, max_length=64)
+    conversation_name: str = Field(default="Direct", min_length=1, max_length=48)
+    conversation_type: Literal["direct", "group", "channel"] = "direct"
 
     @field_validator("body")
     @classmethod
@@ -46,6 +49,7 @@ async def lifespan(application: FastAPI):
         collection = client["chatz"]["messages"]
         collection.create_index([("id", ASCENDING)], unique=True)
         collection.create_index([("created_at", DESCENDING)])
+        collection.create_index([("conversation_id", ASCENDING), ("created_at", DESCENDING)])
     except PyMongoError as error:
         client.close()
         raise RuntimeError("Unable to initialize the MongoDB message store") from error
@@ -119,7 +123,17 @@ def list_messages(
     try:
         documents = collection.find(
             {},
-            {"_id": 0, "id": 1, "body": 1, "created_at": 1, "direction": 1, "transport": 1},
+            {
+                "_id": 0,
+                "id": 1,
+                "body": 1,
+                "created_at": 1,
+                "direction": 1,
+                "transport": 1,
+                "conversation_id": 1,
+                "conversation_name": 1,
+                "conversation_type": 1,
+            },
         ).sort("created_at", DESCENDING).limit(limit)
         return list(documents)
     except PyMongoError as error:

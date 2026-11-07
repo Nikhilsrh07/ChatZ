@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ChatView: View {
     @ObservedObject var model: ChatViewModel
+    @State private var newConversationName = ""
+    @State private var newConversationType = "group"
+    @State private var showingNewConversation = false
 
     var body: some View {
         NavigationStack {
@@ -29,6 +32,32 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack {
+                    Picker("Chat", selection: $model.selectedConversationId) {
+                        ForEach(model.conversations) { conversation in
+                            let kind = conversation.type == "group" ? "Group" :
+                                conversation.type == "channel" ? "Channel" : "Direct"
+                            Text("\(kind) · \(conversation.name)").tag(conversation.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Spacer()
+                    Menu {
+                        Button {
+                            beginCreatingConversation(type: "group")
+                        } label: {
+                            Label("New group chat", systemImage: "person.2")
+                        }
+                        Button {
+                            beginCreatingConversation(type: "channel")
+                        } label: {
+                            Label("New channel", systemImage: "number")
+                        }
+                    } label: {
+                        Label("New", systemImage: "plus.circle.fill")
+                    }
+                }
+
+                HStack {
                     TextField("Peer IP address (Bluetooth tethering)", text: $model.peerAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -41,7 +70,7 @@ struct ChatView: View {
                 }
 
                 GroupBox("Direct Bluetooth") {
-                    Text("iOS does not support Android Bluetooth Classic RFCOMM. Use Wi-Fi or Bluetooth tethering, then connect to the peer's IP address.")
+                    Text("Channels are discoverable to peers on the local network. Use Wi-Fi or Bluetooth tethering; iOS does not support Android Bluetooth Classic RFCOMM.")
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .font(.footnote)
                 }
@@ -91,7 +120,27 @@ struct ChatView: View {
             }
             .padding()
             .navigationTitle("ChatZ")
+            .alert(
+                newConversationType == "group" ? "Create group chat" : "Create channel",
+                isPresented: $showingNewConversation
+            ) {
+                TextField("Name", text: $newConversationName)
+                Button("Cancel", role: .cancel) {
+                    newConversationName = ""
+                }
+                Button("Create") {
+                    model.createConversation(name: newConversationName, type: newConversationType)
+                    newConversationName = ""
+                }
+            } message: {
+                Text("Visible to peers on the same local network.")
+            }
         }
+    }
+
+    private func beginCreatingConversation(type: String) {
+        newConversationType = type
+        showingNewConversation = true
     }
 
     private func messageBubble(_ message: ChatMessage) -> some View {

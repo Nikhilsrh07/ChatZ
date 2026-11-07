@@ -1,18 +1,32 @@
 import Foundation
 import Network
 
+public struct LocalChatEvent {
+    public let kind: String
+    public let id: String
+    public let conversationId: String
+    public let conversationName: String
+    public let conversationType: String
+    public let body: String
+}
+
 public final class LocalChatEngine {
-    public var onMessageReceived: ((String) -> Void)?
+    public var onMessageReceived: ((LocalChatEvent) -> Void)?
     public var onError: ((Error) -> Void)?
+    public var onPeerConnected: (() -> Void)?
 
     private let queue = DispatchQueue(label: "com.chatz.local-chat")
     private let serviceType = "_localchat._tcp"
-    private let serviceName = "ChatZ iOS"
+    private let serviceName = "ChatZ-\(UUID().uuidString.prefix(8))"
     private let maximumMessageBytes = 64 * 1024
+    private let maximumFrameBytes = 256 * 1024
     private var listener: NWListener?
     private var browser: NWBrowser?
-    private var activeConnection: NWConnection?
-    private var receiveBuffer = Data()
+    private var connections: [UUID: NWConnection] = [:]
+    private var activeConnectionID: UUID?
+    private var receiveBuffers: [UUID: Data] = [:]
+    private var seenMessageIds = Set<String>()
+    private var seenConversationIds = Set<String>()
     private var stopped = false
 
     public init() {}
@@ -30,7 +44,7 @@ public final class LocalChatEngine {
                 let listener = try NWListener(using: .tcp, on: port)
                 listener.service = NWListener.Service(name: self.serviceName, type: self.serviceType)
                 listener.newConnectionHandler = { [weak self] connection in
-                    self?.accept(connection)
+                    self?.attach(connection)
                 }
                 listener.stateUpdateHandler = { [weak self] state in
                     if case .failed(let error) = state {
@@ -96,18 +110,44 @@ public final class LocalChatEngine {
                 self.report(LocalChatError.messageTooLarge)
                 return
             }
-            guard let connection = self.activeConnection else {
+            guard let id = self.activeConnectionID, let connection = self.connections[id] else {
                 self.report(LocalChatError.noPeerConnected)
                 return
             }
+            var frame = data
+            frame.append(0x0A)
+            self.send(data: frame, to: connection)
+        }
+    }
 
-            var framedMessage = data
-            framedMessage.append(0x0A)
-            connection.send(content: framedMessage, completion: .contentProcessed { [weak self] error in
-                if let error {
-                    self?.report(error)
-                }
-            })
+    public func announceConversation(_ conversation: ChatConversation) {
+        guard conversation.type != "direct" else { return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            let packet: [String: Any] = [
+                "kind": "conversation",
+                "id": conversation.id,
+                "name": conversation.name,
+                "type": conversation.type
+            ]
+            _ = self.remember(conversation.id, in: &self.seenConversationIds)
+            self.broadcast(packet: packet)
+        }
+    }
+
+    public func sendRoomMessage(_ message: ChatMessage) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            _ = self.remember(message.id, in: &self.seenMessageIds)
+            let packet: [String: Any] = [
+                "kind": "message",
+                "id": message.id,
+                "conversation_id": message.conversationId,
+                "conversation_name": message.conversationName,
+                "conversation_type": message.conversationType,
+                "body": message.body
+            ]
+            self.broadcast(packet: packet)
         }
     }
 
@@ -117,39 +157,41 @@ public final class LocalChatEngine {
             self.stopped = true
             self.listener?.cancel()
             self.browser?.cancel()
-            self.activeConnection?.cancel()
+            self.connections.values.forEach { $0.cancel() }
             self.listener = nil
             self.browser = nil
-            self.activeConnection = nil
-            self.receiveBuffer.removeAll()
+            self.connections.removeAll()
+            self.receiveBuffers.removeAll()
+            self.activeConnectionID = nil
         }
     }
 
-    private func accept(_ connection: NWConnection) {
-        activeConnection?.cancel()
-        activeConnection = connection
-        receiveBuffer.removeAll()
-        start(connection)
-    }
-
     private func connect(to endpoint: NWEndpoint) {
-        guard activeConnection == nil else { return }
+        guard !stopped else { return }
         let connection = NWConnection(to: endpoint, using: .tcp)
-        activeConnection = connection
-        start(connection)
+        attach(connection)
     }
 
-    private func start(_ connection: NWConnection) {
+    private func attach(_ connection: NWConnection) {
+        guard !stopped else {
+            connection.cancel()
+            return
+        }
+        let id = UUID()
+        connections[id] = connection
+        receiveBuffers[id] = Data()
         connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self else { return }
+            guard let self, let connection else { return }
             switch state {
             case .ready:
-                self.receive(from: connection)
+                self.activeConnectionID = id
+                self.onPeerConnected?()
+                self.receive(from: connection, id: id)
             case .failed(let error):
                 self.report(error)
-                self.clear(connection)
+                self.clear(id)
             case .cancelled:
-                self.clear(connection)
+                self.clear(id)
             default:
                 break
             }
@@ -157,54 +199,143 @@ public final class LocalChatEngine {
         connection.start(queue: queue)
     }
 
-    private func receive(from connection: NWConnection?) {
-        guard let connection else { return }
+    private func receive(from connection: NWConnection, id: UUID) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) {
             [weak self, weak connection] content, _, isComplete, error in
             guard let self, let connection else { return }
             if let error {
                 self.report(error)
-                self.clear(connection)
+                self.clear(id)
                 return
             }
             if let content {
-                self.receiveBuffer.append(content)
-                self.consumeCompleteMessages()
+                var buffer = self.receiveBuffers[id, default: Data()]
+                buffer.append(content)
+                self.receiveBuffers[id] = buffer
+                self.consumeCompleteMessages(from: connection, id: id)
             }
             if isComplete {
-                if !self.receiveBuffer.isEmpty {
+                if !(self.receiveBuffers[id] ?? Data()).isEmpty {
                     self.report(LocalChatError.invalidMessage)
                 }
-                self.clear(connection)
+                self.clear(id)
             } else {
-                self.receive(from: connection)
+                self.receive(from: connection, id: id)
             }
         }
     }
 
-    private func consumeCompleteMessages() {
-        while let delimiter = receiveBuffer.firstIndex(of: 0x0A) {
-            let messageData = receiveBuffer[..<delimiter]
-            receiveBuffer.removeSubrange(...delimiter)
-            guard !messageData.isEmpty,
-                  messageData.count <= maximumMessageBytes,
-                  let message = String(data: messageData, encoding: .utf8) else {
+    private func consumeCompleteMessages(from connection: NWConnection, id: UUID) {
+        guard var buffer = receiveBuffers[id] else { return }
+        while let delimiter = buffer.firstIndex(of: 0x0A) {
+            let frame = Data(buffer[..<delimiter])
+            buffer.removeSubrange(...delimiter)
+            guard frame.count <= maximumFrameBytes,
+                  let line = String(data: frame, encoding: .utf8) else {
                 report(LocalChatError.invalidMessage)
                 continue
             }
-            onMessageReceived?(message)
+            receiveLine(line, from: connection)
         }
-        if receiveBuffer.count > maximumMessageBytes {
+        if buffer.count > maximumFrameBytes {
             report(LocalChatError.messageTooLarge)
-            activeConnection?.cancel()
-            receiveBuffer.removeAll()
+            connection.cancel()
+            buffer.removeAll()
+        }
+        receiveBuffers[id] = buffer
+    }
+
+    private func receiveLine(_ line: String, from connection: NWConnection) {
+        guard line.hasPrefix(Self.packetPrefix) else {
+            onMessageReceived?(
+                LocalChatEvent(
+                    kind: "message",
+                    id: UUID().uuidString,
+                    conversationId: ChatConversation.direct.id,
+                    conversationName: ChatConversation.direct.name,
+                    conversationType: ChatConversation.direct.type,
+                    body: line
+                )
+            )
+            return
+        }
+        do {
+            let payload = Data(line.dropFirst(Self.packetPrefix.count).utf8)
+            guard let packet = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                  let kind = packet["kind"] as? String,
+                  let id = packet["id"] as? String,
+                  let name = (packet["name"] ?? packet["conversation_name"]) as? String,
+                  let type = (packet["type"] ?? packet["conversation_type"]) as? String else {
+                throw LocalChatError.invalidMessage
+            }
+            let conversationId = kind == "conversation"
+                ? id
+                : (packet["conversation_id"] as? String ?? "")
+            let event = LocalChatEvent(
+                kind: kind,
+                id: id,
+                conversationId: conversationId,
+                conversationName: name,
+                conversationType: type,
+                body: packet["body"] as? String ?? ""
+            )
+            let isNew: Bool
+            switch kind {
+            case "conversation":
+                isNew = remember(conversationId, in: &seenConversationIds)
+            case "message":
+                isNew = remember(id, in: &seenMessageIds)
+            default:
+                throw LocalChatError.invalidMessage
+            }
+            guard isNew else { return }
+            broadcast(packet: packet, excluding: connection)
+            onMessageReceived?(event)
+        } catch {
+            report(error)
         }
     }
 
-    private func clear(_ connection: NWConnection?) {
-        guard let connection, activeConnection === connection else { return }
-        activeConnection = nil
-        receiveBuffer.removeAll()
+    private func broadcast(_ packet: [String: Any], excluding excluded: NWConnection? = nil) {
+        do {
+            let data = try JSONSerialization.data(withJSONObject: packet, options: [.sortedKeys])
+            var frame = Data(Self.packetPrefix.utf8)
+            frame.append(data)
+            frame.append(0x0A)
+            guard frame.count <= maximumFrameBytes else {
+                throw LocalChatError.messageTooLarge
+            }
+            for connection in connections.values where excluded == nil || connection !== excluded {
+                send(data: frame, to: connection)
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    private func send(data: Data, to connection: NWConnection) {
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            if let error {
+                self?.report(error)
+            }
+        })
+    }
+
+    @discardableResult
+    private func remember(_ id: String, in values: inout Set<String>) -> Bool {
+        guard values.insert(id).inserted else { return false }
+        if values.count > 5_000, let first = values.first {
+            values.remove(first)
+        }
+        return true
+    }
+
+    private func clear(_ id: UUID) {
+        connections.removeValue(forKey: id)
+        receiveBuffers.removeValue(forKey: id)
+        if activeConnectionID == id {
+            activeConnectionID = connections.keys.first
+        }
     }
 
     private func report(_ error: Error) {
@@ -212,6 +343,7 @@ public final class LocalChatEngine {
     }
 
     public static let serverPort: UInt16 = 45_454
+    private static let packetPrefix = "CHATZ1:"
 }
 
 private enum LocalChatError: LocalizedError {
@@ -226,7 +358,7 @@ private enum LocalChatError: LocalizedError {
         case .invalidAddress:
             return "Enter the peer's IP address."
         case .invalidMessage:
-            return "Messages must be non-empty, single-line text."
+            return "Received an invalid ChatZ mesh message."
         case .invalidPort:
             return "The chat TCP port is invalid."
         case .messageTooLarge:

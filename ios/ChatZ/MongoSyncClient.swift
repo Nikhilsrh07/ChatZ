@@ -102,6 +102,9 @@ private struct APIMessage: Codable {
     let createdAt: Int64
     let direction: String
     let transport: String
+    let conversationId: String?
+    let conversationName: String?
+    let conversationType: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -109,6 +112,9 @@ private struct APIMessage: Codable {
         case createdAt = "created_at"
         case direction
         case transport
+        case conversationId = "conversation_id"
+        case conversationName = "conversation_name"
+        case conversationType = "conversation_type"
     }
 
     init(_ message: ChatMessage) {
@@ -117,6 +123,9 @@ private struct APIMessage: Codable {
         createdAt = message.createdAt
         direction = message.direction
         transport = message.transport
+        conversationId = message.conversationId
+        conversationName = message.conversationName
+        conversationType = message.conversationType
     }
 
     var asChatMessage: ChatMessage {
@@ -126,7 +135,10 @@ private struct APIMessage: Codable {
             createdAt: createdAt,
             direction: "incoming",
             transport: transport,
-            synced: true
+            synced: true,
+            conversationId: conversationId ?? ChatConversation.direct.id,
+            conversationName: conversationName ?? ChatConversation.direct.name,
+            conversationType: conversationType ?? ChatConversation.direct.type
         )
     }
 }

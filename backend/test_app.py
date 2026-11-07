@@ -18,6 +18,32 @@ class MessagePayloadTests(unittest.TestCase):
             transport="Bluetooth",
         )
         self.assertEqual(message.body, "Hello")
+        self.assertEqual(message.conversation_id, "direct")
+        self.assertEqual(message.conversation_type, "direct")
+
+    def test_accepts_group_message_metadata(self) -> None:
+        message = MessagePayload(
+            id="group-message-1",
+            body="Hello group",
+            created_at=1,
+            direction="outgoing",
+            transport="Wi-Fi / tethered network",
+            conversation_id="room-1",
+            conversation_name="Weekend plans",
+            conversation_type="group",
+        )
+        self.assertEqual(message.conversation_name, "Weekend plans")
+
+    def test_rejects_invalid_conversation_type(self) -> None:
+        with self.assertRaises(ValidationError):
+            MessagePayload(
+                id="message-invalid-room",
+                body="Hello",
+                created_at=1,
+                direction="outgoing",
+                transport="Bluetooth",
+                conversation_type="unknown",
+            )
 
     def test_accepts_message_at_byte_limit(self) -> None:
         message = MessagePayload(
