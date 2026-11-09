@@ -1,10 +1,10 @@
 # ChatZ
 
-ChatZ is a local-network chat app with native Android and iOS clients, on-device SQLite history, and an optional authenticated MongoDB sync service. Both clients support one-to-one messages, mesh group chats, and locally discoverable named channels over Wi-Fi or an IP network shared through Bluetooth tethering. Android also supports direct Bluetooth Classic one-to-one chat between paired Android devices.
+ChatZ is a local-network chat app with native Android and iOS clients, on-device SQLite history, and an optional authenticated MongoDB sync service. Both clients support one-to-one messages, mesh group chats, and locally discoverable named channels over Wi-Fi or an IP network shared through Bluetooth tethering, with dark-themed native interfaces. Android also supports direct Bluetooth Classic one-to-one chat between paired Android devices.
 
 ## iOS app
 
-The native SwiftUI iOS app is in `ios/ChatZ.xcodeproj`. It includes SQLite conversation/message history, Bonjour peer discovery, mesh group chats and named channels, manual IP connections for tethered networks, and optional MongoDB API sync. iOS does not support Android's Bluetooth Classic RFCOMM chat; use Wi-Fi or Bluetooth tethering and connect by IP instead.
+The native SwiftUI iOS app is in `ios/ChatZ.xcodeproj`. It includes SQLite conversation/message history, Bonjour peer discovery, mesh group chats and named channels, manual IP connections for tethered networks, optional MongoDB API sync, and a dark appearance. iOS does not support Android's Bluetooth Classic RFCOMM chat; use Wi-Fi or Bluetooth tethering and connect by IP instead.
 
 1. On a Mac with Xcode 15 or newer, open `ios/ChatZ.xcodeproj`.
 2. Select the ChatZ scheme and an iOS 16+ simulator or connected iPhone, then Run. The first local-network action prompts for network permission.

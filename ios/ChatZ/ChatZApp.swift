@@ -10,6 +10,7 @@ struct ChatZApp: App {
                 .onDisappear {
                     model.stop()
                 }
+                .preferredColorScheme(.dark)
         }
     }
 }

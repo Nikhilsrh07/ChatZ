@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteException
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
@@ -152,24 +153,29 @@ class MainActivity : Activity() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 24, 24, 24)
+            setBackgroundColor(DARK_BACKGROUND)
         }
         val scrollView = ScrollView(this).apply {
+            setBackgroundColor(DARK_BACKGROUND)
             addView(content)
         }
 
         content.addView(TextView(this).apply {
             text = "ChatZ local chat"
             textSize = 24f
+            setTextColor(DARK_PRIMARY_TEXT)
         })
         statusView = TextView(this).apply {
             text = "Messages are stored on this device. Both peers must be on the same network for Wi-Fi/tethered chat."
             textSize = 14f
+            setTextColor(DARK_SECONDARY_TEXT)
         }
         content.addView(statusView, matchWidth())
 
         content.addView(TextView(this).apply {
             text = "Chats"
             textSize = 18f
+            setTextColor(DARK_PRIMARY_TEXT)
         })
         conversationAdapter = ArrayAdapter(
             this,
@@ -217,6 +223,8 @@ class MainActivity : Activity() {
         networkAddressInput = EditText(this).apply {
             hint = "Peer IP address (for Bluetooth tethering)"
             setSingleLine(true)
+            setTextColor(DARK_PRIMARY_TEXT)
+            setHintTextColor(DARK_HINT_TEXT)
         }
         content.addView(networkAddressInput, matchWidth())
         content.addView(button("Connect by IP on port 45454") {
@@ -231,6 +239,7 @@ class MainActivity : Activity() {
         content.addView(TextView(this).apply {
             text = "Bluetooth direct chat (paired devices)"
             textSize = 18f
+            setTextColor(DARK_PRIMARY_TEXT)
         })
         content.addView(button("Start Bluetooth server") {
             if (ensureBluetoothPermissions()) {
@@ -272,6 +281,8 @@ class MainActivity : Activity() {
         bluetoothAddressInput = EditText(this).apply {
             hint = "Bluetooth address (filled after discovery)"
             setSingleLine(true)
+            setTextColor(DARK_PRIMARY_TEXT)
+            setHintTextColor(DARK_HINT_TEXT)
         }
         content.addView(bluetoothAddressInput, matchWidth())
         bluetoothPeerSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -301,10 +312,13 @@ class MainActivity : Activity() {
         content.addView(TextView(this).apply {
             text = "Message"
             textSize = 18f
+            setTextColor(DARK_PRIMARY_TEXT)
         })
         messageInput = EditText(this).apply {
             hint = "Type a single-line message"
             setSingleLine(true)
+            setTextColor(DARK_PRIMARY_TEXT)
+            setHintTextColor(DARK_HINT_TEXT)
         }
         content.addView(messageInput, matchWidth())
         content.addView(button("Send over Wi-Fi / tethered network") {
@@ -320,9 +334,11 @@ class MainActivity : Activity() {
         content.addView(TextView(this).apply {
             text = "Message history"
             textSize = 18f
+            setTextColor(DARK_PRIMARY_TEXT)
         })
         historyView = TextView(this).apply {
             textSize = 14f
+            setTextColor(DARK_SECONDARY_TEXT)
         }
         content.addView(historyView, matchWidth())
         setContentView(scrollView)
@@ -482,6 +498,10 @@ class MainActivity : Activity() {
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
     private companion object {
+        private val DARK_BACKGROUND = Color.rgb(18, 19, 24)
+        private val DARK_PRIMARY_TEXT = Color.rgb(245, 245, 247)
+        private val DARK_SECONDARY_TEXT = Color.rgb(190, 193, 202)
+        private val DARK_HINT_TEXT = Color.rgb(135, 139, 151)
         const val REQUEST_BLUETOOTH_PERMISSIONS = 1001
     }
 }
